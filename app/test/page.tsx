@@ -1,13 +1,60 @@
 'use client';
 
-import { useState } from 'react';
-import { shortenUrl } from '@/lib/urlShortener';
+import { useState, useEffect } from 'react';
+
+// Безопасная функция для сокращения URL на клиенте
+function shortenUrl(url: string, maxLength: number = 50): string {
+  if (!url || typeof url !== 'string') {
+    return '';
+  }
+
+  try {
+    if (typeof URL !== 'undefined') {
+      const urlObj = new URL(url);
+      const domain = urlObj.hostname.replace('www.', '');
+      const path = urlObj.pathname;
+      
+      if (url.length <= maxLength) {
+        return url;
+      }
+      
+      const shortPath = path.length > 20 
+        ? path.substring(0, 20) + '...' 
+        : path;
+      
+      const shortUrl = `${domain}${shortPath}`;
+      
+      if (shortUrl.length > maxLength) {
+        const domainParts = domain.split('.');
+        if (domainParts.length >= 2) {
+          const mainDomain = domainParts.slice(-2).join('.');
+          const remainingLength = maxLength - mainDomain.length - shortPath.length - 3;
+          if (remainingLength > 0) {
+            return `${domainParts[0].substring(0, remainingLength)}...${mainDomain}${shortPath}`;
+          }
+          return `${mainDomain}${shortPath.substring(0, maxLength - mainDomain.length)}...`;
+        }
+        return domain.substring(0, maxLength - 3) + '...';
+      }
+      
+      return shortUrl;
+    }
+    return url.length > maxLength ? url.substring(0, maxLength - 3) + '...' : url;
+  } catch (error) {
+    return url.length > maxLength ? url.substring(0, maxLength - 3) + '...' : url;
+  }
+}
 
 export default function TestPage() {
   const [text, setText] = useState('Генеральный директор Coinbase уволил программистов, не использующих ИИ');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleSearch = async () => {
     setLoading(true);
@@ -28,112 +75,140 @@ export default function TestPage() {
     }
   };
 
+  if (!mounted) {
+    return (
+      <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ fontSize: '1.125rem', color: '#6b7280' }}>Загрузка...</div>
+      </div>
+    );
+  }
+
   return (
-    <main className="min-h-screen bg-gray-50">
-      <div className="container mx-auto px-4 py-8 max-w-4xl">
-        <h1 className="text-3xl font-bold mb-6 text-center">Тестирование поиска источников</h1>
+    <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb', padding: '2rem' }}>
+      <div style={{ maxWidth: '896px', margin: '0 auto' }}>
+        <h1 style={{ fontSize: '1.875rem', fontWeight: 'bold', marginBottom: '1.5rem', textAlign: 'center', color: '#000' }}>
+          Тестирование поиска источников
+        </h1>
         
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <label htmlFor="text-input" className="block text-sm font-medium mb-2 text-gray-700">
+        <div style={{ backgroundColor: '#fff', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', padding: '1.5rem', marginBottom: '1.5rem' }}>
+          <label htmlFor="text-input" style={{ display: 'block', fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.5rem', color: '#374151' }}>
             Введите текст для поиска:
           </label>
           <textarea
             id="text-input"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            className="w-full p-3 border border-gray-300 rounded-md min-h-[120px] resize-y focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            style={{
+              width: '100%',
+              padding: '0.75rem',
+              border: '1px solid #d1d5db',
+              borderRadius: '0.375rem',
+              minHeight: '120px',
+              resize: 'vertical',
+              fontFamily: 'inherit'
+            }}
             placeholder="Введите текст или ссылку на Telegram-пост..."
           />
         </div>
 
-        <div className="mb-6">
+        <div style={{ marginBottom: '1.5rem' }}>
           <button
             onClick={handleSearch}
             disabled={loading || !text.trim()}
-            className="w-full px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium"
+            style={{
+              width: '100%',
+              padding: '0.75rem 1.5rem',
+              backgroundColor: loading || !text.trim() ? '#9ca3af' : '#2563eb',
+              color: '#fff',
+              borderRadius: '0.375rem',
+              border: 'none',
+              cursor: loading || !text.trim() ? 'not-allowed' : 'pointer',
+              fontWeight: '500',
+              fontSize: '1rem'
+            }}
           >
             {loading ? 'Поиск...' : 'Найти источники'}
           </button>
         </div>
 
         {error && (
-          <div className="mb-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg">
+          <div style={{ marginBottom: '1.5rem', padding: '1rem', backgroundColor: '#fee2e2', border: '1px solid #f87171', color: '#991b1b', borderRadius: '0.5rem' }}>
             <strong>Ошибка:</strong> {error}
           </div>
         )}
 
         {results && (
-          <div className="space-y-6">
-          <div className="bg-gray-50 p-4 rounded-md">
-            <h2 className="text-xl font-semibold mb-4">Извлеченные элементы</h2>
-            <div className="space-y-2">
-              {results.input.keyElements.statements && results.input.keyElements.statements.length > 0 && (
-                <div>
-                  <strong>Утверждения:</strong>
-                  <ul className="list-disc list-inside ml-4">
-                    {results.input.keyElements.statements.map((stmt: string, i: number) => (
-                      <li key={i}>{stmt}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {results.input.keyElements.dates && results.input.keyElements.dates.length > 0 && (
-                <div>
-                  <strong>Даты:</strong> {results.input.keyElements.dates.join(', ')}
-                </div>
-              )}
-              {results.input.keyElements.names && results.input.keyElements.names.length > 0 && (
-                <div>
-                  <strong>Имена:</strong> {results.input.keyElements.names.join(', ')}
-                </div>
-              )}
-              {results.input.keyElements.numbers && results.input.keyElements.numbers.length > 0 && (
-                <div>
-                  <strong>Числа:</strong> {results.input.keyElements.numbers.join(', ')}
-                </div>
-              )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            <div style={{ backgroundColor: '#f9fafb', padding: '1rem', borderRadius: '0.375rem' }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem' }}>Извлеченные элементы</h2>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {results.input.keyElements.statements && results.input.keyElements.statements.length > 0 && (
+                  <div>
+                    <strong>Утверждения:</strong>
+                    <ul style={{ listStyle: 'disc', paddingLeft: '1.5rem', marginTop: '0.5rem' }}>
+                      {results.input.keyElements.statements.map((stmt: string, i: number) => (
+                        <li key={i}>{stmt}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {results.input.keyElements.dates && results.input.keyElements.dates.length > 0 && (
+                  <div>
+                    <strong>Даты:</strong> {results.input.keyElements.dates.join(', ')}
+                  </div>
+                )}
+                {results.input.keyElements.names && results.input.keyElements.names.length > 0 && (
+                  <div>
+                    <strong>Имена:</strong> {results.input.keyElements.names.join(', ')}
+                  </div>
+                )}
+                {results.input.keyElements.numbers && results.input.keyElements.numbers.length > 0 && (
+                  <div>
+                    <strong>Числа:</strong> {results.input.keyElements.numbers.slice(0, 3).join(', ')}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
 
-          <div className="bg-blue-50 p-4 rounded-md">
-            <h2 className="text-xl font-semibold mb-4">
-              Результаты поиска ({results.results.count} источников)
-            </h2>
-            <div className="space-y-4">
-              {results.results.sources.map((source: any, index: number) => (
-                <div key={index} className="bg-white p-4 rounded border border-gray-200">
-                  <h3 className="font-semibold text-lg mb-2">{source.title}</h3>
-                  <a
-                    href={source.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline text-sm break-all"
-                    title={source.url}
-                  >
-                    {shortenUrl(source.url, 60)}
-                  </a>
-                  {source.snippet && (
-                    <p className="mt-2 text-gray-700 text-sm">{source.snippet}</p>
-                  )}
-                  {source.sourceType && (
-                    <span className="inline-block mt-2 px-2 py-1 bg-gray-200 rounded text-xs">
-                      Тип: {source.sourceType}
-                    </span>
-                  )}
-                </div>
-              ))}
+            <div style={{ backgroundColor: '#eff6ff', padding: '1rem', borderRadius: '0.375rem' }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem' }}>
+                Результаты поиска ({results.results.count} источников)
+              </h2>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {results.results.sources.map((source: any, index: number) => (
+                  <div key={index} style={{ backgroundColor: '#fff', padding: '1rem', borderRadius: '0.375rem', border: '1px solid #e5e7eb' }}>
+                    <h3 style={{ fontWeight: '600', fontSize: '1.125rem', marginBottom: '0.5rem' }}>{source.title}</h3>
+                    <a
+                      href={source.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: '#2563eb', textDecoration: 'underline', fontSize: '0.875rem', wordBreak: 'break-all' }}
+                      title={source.url}
+                    >
+                      {shortenUrl(source.url, 60)}
+                    </a>
+                    {source.snippet && (
+                      <p style={{ marginTop: '0.5rem', color: '#374151', fontSize: '0.875rem' }}>{source.snippet}</p>
+                    )}
+                    {source.sourceType && (
+                      <span style={{ display: 'inline-block', marginTop: '0.5rem', padding: '0.25rem 0.5rem', backgroundColor: '#e5e7eb', borderRadius: '0.25rem', fontSize: '0.75rem' }}>
+                        Тип: {source.sourceType}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
 
-          <div className="bg-green-50 p-4 rounded-md">
-            <h2 className="text-xl font-semibold mb-2">Предварительный формат ответа</h2>
-            <pre className="whitespace-pre-wrap text-sm bg-white p-4 rounded border border-gray-200">
-              {results.preview}
-            </pre>
-          </div>
+            <div style={{ backgroundColor: '#f0fdf4', padding: '1rem', borderRadius: '0.375rem' }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '0.5rem' }}>Предварительный формат ответа</h2>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.875rem', backgroundColor: '#f9fafb', padding: '1rem', borderRadius: '0.375rem', border: '1px solid #e5e7eb', overflowX: 'auto' }}>
+                {results.preview}
+              </pre>
+            </div>
           </div>
         )}
       </div>
-    </main>
+    </div>
   );
 }
