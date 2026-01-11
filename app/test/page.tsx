@@ -56,14 +56,14 @@ export default function TestPage() {
           </button>
         </div>
 
-      {error && (
-        <div className="mb-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg">
-          <strong>Ошибка:</strong> {error}
-        </div>
-      )}
+        {error && (
+          <div className="mb-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg">
+            <strong>Ошибка:</strong> {error}
+          </div>
+        )}
 
-      {results && (
-        <div className="space-y-6">
+        {results && (
+          <div className="space-y-6">
           <div className="bg-gray-50 p-4 rounded-md">
             <h2 className="text-xl font-semibold mb-4">Извлеченные элементы</h2>
             <div className="space-y-2">
@@ -131,8 +131,9 @@ export default function TestPage() {
               {results.preview}
             </pre>
           </div>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </main>
   );
 }
