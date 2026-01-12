@@ -2,9 +2,14 @@ import { sendMessage } from './telegramApi';
 import { extractTelegramPost } from './telegramParser';
 import { extractKeyElements } from './textProcessor';
 import { searchSources } from './searchEngine';
-import { formatUrlForTelegram } from './urlShortener';
+import { analyzeSourcesWithAI } from './aiAnalyzer';
+import { formatFinalMessage } from './messageFormatter';
+import { logger } from './logger';
 
 export async function processMessage(chatId: number, messageText: string) {
+  const startTime = Date.now();
+  logger.info('Processing message', { chatId, messageLength: messageText.length });
+  
   try {
     // Отправляем сообщение о начале обработки
     await sendMessage(chatId, '🔍 Анализирую запрос...');
@@ -44,14 +49,26 @@ export async function processMessage(chatId: number, messageText: string) {
     await sendMessage(chatId, '🌐 Ищу возможные источники...');
     const searchResults = await searchSources(searchQueries);
 
-    // Формируем предварительные результаты
-    const previewMessage = formatPreviewResults(searchResults, keyElements);
+    if (searchResults.length === 0) {
+      await sendMessage(chatId, '❌ *Источники не найдены*\n\nНе удалось найти релевантные источники для предоставленного текста.');
+      return;
+    }
 
-    // Отправляем предварительные результаты
-    await sendMessage(chatId, previewMessage);
+    // Выполняем AI-анализ
+    await sendMessage(chatId, '🤖 Анализирую источники с помощью AI...');
+    const analysis = await analyzeSourcesWithAI(textToProcess, searchResults);
+
+    // Формируем финальное сообщение с результатами AI-анализа
+    const finalMessage = formatFinalMessage(textToProcess, analysis);
+
+    // Отправляем финальные результаты
+    await sendMessage(chatId, finalMessage);
+
+    const duration = Date.now() - startTime;
+    logger.info('Message processed successfully', { chatId, duration });
 
   } catch (error) {
-    console.error('Error processing message:', error);
+    logger.error('Error processing message', { chatId, error });
     await sendMessage(chatId, '❌ Произошла ошибка при обработке запроса. Попробуйте позже.');
   }
 }
@@ -83,43 +100,4 @@ function generateSearchQueries(keyElements: any, originalText: string): string[]
   }
 
   return queries.slice(0, 3); // Максимум 3 запроса
-}
-
-function formatPreviewResults(results: any[], keyElements: any): string {
-  let message = '📊 *Предварительные результаты поиска:*\n\n';
-  
-  if (results.length === 0) {
-    return message + '❌ Источники не найдены.';
-  }
-
-  message += `🔍 *Найдено источников:* ${results.length}\n\n`;
-  message += '*Извлеченные элементы:*\n';
-  
-  if (keyElements.statements && keyElements.statements.length > 0) {
-    message += `• Утверждения: ${keyElements.statements.slice(0, 2).join(', ')}\n`;
-  }
-  if (keyElements.dates && keyElements.dates.length > 0) {
-    message += `• Даты: ${keyElements.dates.join(', ')}\n`;
-  }
-  if (keyElements.names && keyElements.names.length > 0) {
-    message += `• Имена: ${keyElements.names.slice(0, 3).join(', ')}\n`;
-  }
-  if (keyElements.numbers && keyElements.numbers.length > 0) {
-    message += `• Числа: ${keyElements.numbers.slice(0, 3).join(', ')}\n`;
-  }
-
-  message += '\n*Найденные источники:*\n\n';
-
-  results.forEach((result, index) => {
-    message += `${index + 1}. *${result.title}*\n`;
-    message += `   ${formatUrlForTelegram(result.url)}\n`;
-    if (result.snippet) {
-      message += `   ${result.snippet.substring(0, 100)}...\n`;
-    }
-    message += '\n';
-  });
-
-  message += '\n⏳ *AI-анализ будет выполнен на следующем этапе...*';
-
-  return message;
 }

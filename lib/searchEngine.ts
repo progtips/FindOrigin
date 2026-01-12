@@ -1,5 +1,7 @@
 const SEARCH_API_KEY = process.env.SEARCH_API_KEY;
 const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID;
+import { cache, createSearchCacheKey } from './cache';
+import { logger } from './logger';
 
 interface SearchResult {
   title: string;
@@ -16,10 +18,25 @@ export async function searchSources(queries: string[]): Promise<SearchResult[]> 
 
   for (const query of queries) {
     try {
+      // Проверяем кэш
+      const cacheKey = createSearchCacheKey(query);
+      const cached = cache.get<SearchResult[]>(cacheKey);
+      
+      if (cached) {
+        logger.debug(`Cache hit for query: ${query}`);
+        allResults.push(...cached);
+        continue;
+      }
+
+      logger.info(`Searching for: ${query}`);
       const results = await performSearch(query);
+      
+      // Сохраняем в кэш
+      cache.set(cacheKey, results, 10 * 60 * 1000); // 10 минут
+      
       allResults.push(...results);
     } catch (error) {
-      console.error(`Error searching for "${query}":`, error);
+      logger.error(`Error searching for "${query}":`, error);
     }
   }
 

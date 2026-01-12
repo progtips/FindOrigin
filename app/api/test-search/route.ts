@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { extractKeyElements } from '@/lib/textProcessor';
 import { searchSources } from '@/lib/searchEngine';
-import { shortenUrl } from '@/lib/urlShortener';
+import { analyzeSourcesWithAI } from '@/lib/aiAnalyzer';
+import { formatFinalMessage } from '@/lib/messageFormatter';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,6 +24,12 @@ export async function GET(request: NextRequest) {
     // Ищем источники
     const searchResults = await searchSources(searchQueries);
 
+    // Выполняем AI-анализ
+    const analysis = await analyzeSourcesWithAI(text, searchResults);
+
+    // Формируем финальное сообщение
+    const finalMessage = formatFinalMessage(text, analysis);
+
     // Формируем ответ
     const response = {
       input: {
@@ -34,7 +41,12 @@ export async function GET(request: NextRequest) {
         count: searchResults.length,
         sources: searchResults,
       },
-      preview: formatPreviewResults(searchResults, keyElements),
+      analysis: {
+        sources: analysis.sources,
+        summary: analysis.summary,
+      },
+      preview: finalMessage,
+      rawAnalysis: analysis,
     };
 
     return NextResponse.json(response, { status: 200 });
@@ -74,44 +86,4 @@ function generateSearchQueries(keyElements: any, originalText: string): string[]
   }
 
   return queries.slice(0, 3); // Максимум 3 запроса
-}
-
-function formatPreviewResults(results: any[], keyElements: any): string {
-  let message = '📊 Предварительные результаты поиска:\n\n';
-  
-  if (results.length === 0) {
-    return message + '❌ Источники не найдены.';
-  }
-
-  message += `🔍 Найдено источников: ${results.length}\n\n`;
-  message += 'Извлеченные элементы:\n';
-  
-  if (keyElements.statements && keyElements.statements.length > 0) {
-    message += `• Утверждения: ${keyElements.statements.slice(0, 2).join(', ')}\n`;
-  }
-  if (keyElements.dates && keyElements.dates.length > 0) {
-    message += `• Даты: ${keyElements.dates.join(', ')}\n`;
-  }
-  if (keyElements.names && keyElements.names.length > 0) {
-    message += `• Имена: ${keyElements.names.slice(0, 3).join(', ')}\n`;
-  }
-  if (keyElements.numbers && keyElements.numbers.length > 0) {
-    message += `• Числа: ${keyElements.numbers.slice(0, 3).join(', ')}\n`;
-  }
-
-  message += '\nНайденные источники:\n\n';
-
-  results.forEach((result, index) => {
-    message += `${index + 1}. ${result.title}\n`;
-    message += `   ${shortenUrl(result.url)} (${result.url})\n`;
-    if (result.snippet) {
-      message += `   ${result.snippet.substring(0, 100)}...\n`;
-    }
-    message += `   Тип: ${result.sourceType || 'неизвестно'}\n`;
-    message += '\n';
-  });
-
-  message += '\n⏳ AI-анализ будет выполнен на следующем этапе...';
-
-  return message;
 }
