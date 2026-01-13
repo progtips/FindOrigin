@@ -10,10 +10,33 @@ export const dynamic = 'force-dynamic';
 async function handleCommand(chatId: number, command: string): Promise<boolean> {
   const normalizedCommand = command.toLowerCase().trim();
 
-  if (normalizedCommand === '/start') {
+  if (normalizedCommand.startsWith('/start')) {
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://findorigin.vercel.app';
     const webAppUrl = `${appUrl}/tma`;
     
+    // Извлекаем параметр из команды /start (например, /start tma)
+    const parts = normalizedCommand.split(' ');
+    const startParam = parts.length > 1 ? parts[1] : null;
+    
+    // Если параметр "tma", сразу открываем Mini App
+    if (startParam === 'tma') {
+      await sendMessageWithKeyboard(
+        chatId,
+        '🚀 *Открываю Mini App...*\n\n' +
+        'Нажмите на кнопку ниже, чтобы открыть интерфейс для проверки источников.',
+        [
+          [
+            {
+              text: '🚀 Открыть FindOrigin',
+              web_app: { url: webAppUrl },
+            },
+          ],
+        ]
+      );
+      return true;
+    }
+    
+    // Обычное приветствие
     await sendMessageWithKeyboard(
       chatId,
       '👋 *Добро пожаловать в FindOrigin Bot!*\n\n' +
