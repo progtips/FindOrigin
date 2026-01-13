@@ -6,32 +6,27 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    
-    // Валидация запроса от Telegram
-    if (!body.message) {
-      return NextResponse.json({ ok: true }, { status: 200 });
-    }
 
-    const { chat, text } = body.message;
-    
-    if (!chat || !text) {
-      return NextResponse.json({ ok: true }, { status: 200 });
-    }
+    // Telegram присылает не только message (edited_message, callback_query и т.д.)
+    const msg = body.message ?? body.edited_message;
+    if (!msg) return NextResponse.json({ ok: true });
 
-    const chatId = chat.id;
-    const messageText = text;
+    const chatId = msg?.chat?.id;
+    const text = msg?.text;
 
-    // Быстрый возврат 200 OK, обработка асинхронно
-    processMessage(chatId, messageText).catch(console.error);
+    if (!chatId || !text) return NextResponse.json({ ok: true });
 
-    return NextResponse.json({ ok: true }, { status: 200 });
+    // ВАЖНО: дождаться обработки, иначе Vercel может оборвать выполнение
+    await processMessage(chatId, text);
+
+    return NextResponse.json({ ok: true });
   } catch (error) {
     console.error('Webhook error:', error);
-    return NextResponse.json({ ok: true }, { status: 200 });
+    return NextResponse.json({ ok: true });
   }
 }
 
-// Обработка GET для верификации webhook
 export async function GET() {
   return NextResponse.json({ status: 'ok' });
 }
+
