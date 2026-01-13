@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { processMessage } from '@/lib/telegram';
-import { sendMessage } from '@/lib/telegramApi';
+import { sendMessage, sendMessageWithKeyboard } from '@/lib/telegramApi';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,14 +11,26 @@ async function handleCommand(chatId: number, command: string): Promise<boolean> 
   const normalizedCommand = command.toLowerCase().trim();
 
   if (normalizedCommand === '/start') {
-    await sendMessage(
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://findorigin.vercel.app';
+    const webAppUrl = `${appUrl}/tma`;
+    
+    await sendMessageWithKeyboard(
       chatId,
       '👋 *Добро пожаловать в FindOrigin Bot!*\n\n' +
       'Я помогаю найти источники информации для проверки фактов.\n\n' +
       '📝 *Как использовать:*\n' +
-      '• Отправьте мне текст факта или утверждения\n' +
+      '• Откройте Mini App для удобного интерфейса\n' +
+      '• Или отправьте мне текст факта или утверждения\n' +
       '• Или отправьте ссылку на Telegram-пост\n\n' +
-      'Я найду и проанализирую релевантные источники информации.'
+      'Я найду и проанализирую релевантные источники информации.',
+      [
+        [
+          {
+            text: '🚀 Открыть Mini App',
+            web_app: { url: webAppUrl },
+          },
+        ],
+      ]
     );
     return true; // Команда обработана
   }

@@ -79,6 +79,80 @@ async function sendMessagePlain(chatId: number, text: string): Promise<void> {
 }
 
 /**
+ * Отправляет сообщение с кнопками (inline keyboard)
+ */
+export async function sendMessageWithKeyboard(
+  chatId: number,
+  text: string,
+  keyboard: Array<Array<{ text: string; web_app?: { url: string }; url?: string }>>
+): Promise<void> {
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.error('TELEGRAM_BOT_TOKEN is not set');
+    return;
+  }
+
+  try {
+    const response = await fetch(`${TELEGRAM_API_URL}/sendMessage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text,
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: keyboard,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error('Telegram API error:', error);
+      
+      // Если ошибка из-за форматирования, пробуем без Markdown
+      if (error.description?.includes('parse')) {
+        await sendMessageWithKeyboardPlain(chatId, text, keyboard);
+      } else {
+        throw new Error(`Telegram API error: ${error.description || 'Unknown error'}`);
+      }
+    }
+  } catch (error) {
+    console.error('Error sending message with keyboard:', error);
+    throw error;
+  }
+}
+
+/**
+ * Отправляет сообщение с кнопками без Markdown
+ */
+async function sendMessageWithKeyboardPlain(
+  chatId: number,
+  text: string,
+  keyboard: Array<Array<{ text: string; web_app?: { url: string }; url?: string }>>
+): Promise<void> {
+  const response = await fetch(`${TELEGRAM_API_URL}/sendMessage`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: text,
+      reply_markup: {
+        inline_keyboard: keyboard,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Telegram API error: ${error.description || 'Unknown error'}`);
+  }
+}
+
+/**
  * Разбивает сообщение на части
  */
 function splitMessage(message: string, maxLength: number): string[] {
