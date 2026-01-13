@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 interface TelegramWebApp {
   initData: string;
@@ -87,84 +87,138 @@ export default function TmaClient() {
   const [results, setResults] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tgWebApp, setTgWebApp] = useState<TelegramWebApp | null>(null);
+  const [isTgReady, setIsTgReady] = useState(false);
 
-  useEffect(() => {
-    // Инициализация Telegram Web App
-    if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
-      const webApp = window.Telegram.WebApp;
-      webApp.ready();
-      webApp.expand();
-      setTgWebApp(webApp);
-
-      // Настройка кнопки "Назад"
-      webApp.BackButton.onClick(() => {
-        setResults(null);
-        setText('');
-        setError(null);
-        webApp.BackButton.hide();
-      });
-
-      // Настройка главной кнопки
-      webApp.MainButton.setText('Анализировать');
-      webApp.MainButton.onClick(handleAnalyze);
-      webApp.MainButton.show();
-
-      return () => {
-        webApp.BackButton.offClick(() => {});
-        webApp.MainButton.offClick(handleAnalyze);
-      };
+  // Функция анализа с useCallback для стабильной ссылки
+  const handleAnalyze = useCallback(async () => {
+    if (!text.trim() || loading) {
+      console.log('handleAnalyze: пропущено', { text: text.trim(), loading });
+      return;
     }
-  }, []);
 
-  useEffect(() => {
-    // Обновляем состояние главной кнопки при изменении текста
-    if (tgWebApp) {
-      if (text.trim() && !loading) {
-        tgWebApp.MainButton.enable();
-      } else {
-        tgWebApp.MainButton.disable();
-      }
-    }
-  }, [text, loading, tgWebApp]);
-
-  const handleAnalyze = async () => {
-    if (!text.trim() || loading) return;
-
+    console.log('handleAnalyze: начало', { text });
     setLoading(true);
     setError(null);
     setResults(null);
 
-    if (tgWebApp) {
-      tgWebApp.MainButton.showProgress();
-      tgWebApp.MainButton.disable();
+    const webApp = window.Telegram?.WebApp;
+    if (webApp) {
+      webApp.MainButton.showProgress();
+      webApp.MainButton.disable();
     }
 
     try {
       const response = await fetch(`/api/test-search?text=${encodeURIComponent(text)}`);
       if (!response.ok) {
-        throw new Error('Ошибка при выполнении анализа');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Ошибка при выполнении анализа');
       }
 
       const data = await response.json();
+      console.log('handleAnalyze: получены данные', data);
+      
       setResults({
-        sources: data.analysis.sources || [],
-        summary: data.analysis.summary || '',
+        sources: data.analysis?.sources || [],
+        summary: data.analysis?.summary || '',
       });
 
       // Показываем кнопку "Назад" после получения результатов
-      if (tgWebApp) {
-        tgWebApp.BackButton.show();
+      if (webApp) {
+        webApp.BackButton.show();
+        webApp.MainButton.hide();
       }
     } catch (err) {
+      console.error('handleAnalyze: ошибка', err);
       setError(err instanceof Error ? err.message : 'Неизвестная ошибка');
     } finally {
       setLoading(false);
-      if (tgWebApp) {
-        tgWebApp.MainButton.hideProgress();
-        tgWebApp.MainButton.enable();
+      if (webApp) {
+        webApp.MainButton.hideProgress();
+        webApp.MainButton.enable();
       }
     }
-  };
+  }, [text, loading]);
+
+  // Инициализация Telegram Web App
+  useEffect(() => {
+    const initTelegramWebApp = () => {
+      if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
+        const webApp = window.Telegram.WebApp;
+        console.log('Telegram Web App найден', webApp);
+        
+        webApp.ready();
+        webApp.expand();
+        setTgWebApp(webApp);
+        setIsTgReady(true);
+
+        // Настройка кнопки "Назад"
+        webApp.BackButton.onClick(() => {
+          console.log('BackButton clicked');
+          setResults(null);
+          setText('');
+          setError(null);
+          webApp.BackButton.hide();
+          webApp.MainButton.show();
+        });
+
+        // Настройка главной кнопки
+        webApp.MainButton.setText('Анализировать');
+        webApp.MainButton.onClick(() => {
+          console.log('MainButton clicked');
+          handleAnalyze();
+        });
+        webApp.MainButton.show();
+
+        // Изначально кнопка отключена, если текст пустой
+        if (!text.trim()) {
+          webApp.MainButton.disable();
+        }
+
+        return () => {
+          webApp.BackButton.offClick(() => {});
+          webApp.MainButton.offClick(() => {});
+        };
+      } else {
+        console.warn('Telegram Web App не найден - возможно, открыто в обычном браузере');
+        setIsTgReady(true); // Разрешаем работу без Telegram для тестирования
+      }
+    };
+
+    // Проверяем, загружен ли скрипт
+    if (typeof window !== 'undefined') {
+      if (window.Telegram?.WebApp) {
+        initTelegramWebApp();
+      } else {
+        // Ждём загрузки скрипта
+        const checkInterval = setInterval(() => {
+          if (window.Telegram?.WebApp) {
+            clearInterval(checkInterval);
+            initTelegramWebApp();
+          }
+        }, 100);
+
+        // Таймаут на случай, если скрипт не загрузится
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          if (!window.Telegram?.WebApp) {
+            console.warn('Telegram Web App SDK не загрузился за 5 секунд');
+            setIsTgReady(true);
+          }
+        }, 5000);
+      }
+    }
+  }, [handleAnalyze]);
+
+  useEffect(() => {
+    // Обновляем состояние главной кнопки при изменении текста
+    if (tgWebApp && isTgReady) {
+      if (text.trim() && !loading && !results) {
+        tgWebApp.MainButton.enable();
+      } else {
+        tgWebApp.MainButton.disable();
+      }
+    }
+  }, [text, loading, results, tgWebApp, isTgReady]);
 
   const theme = tgWebApp?.themeParams || {};
   const bgColor = theme.bg_color || '#ffffff';
@@ -268,6 +322,29 @@ export default function TmaClient() {
               >
                 🔍 Анализирую запрос...
               </div>
+            )}
+
+            {/* Альтернативная кнопка для тестирования вне Telegram */}
+            {!tgWebApp && isTgReady && (
+              <button
+                onClick={handleAnalyze}
+                disabled={!text.trim() || loading}
+                style={{
+                  width: '100%',
+                  padding: '12px 24px',
+                  backgroundColor: buttonColor,
+                  color: buttonTextColor,
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '16px',
+                  fontWeight: '500',
+                  cursor: text.trim() && !loading ? 'pointer' : 'not-allowed',
+                  opacity: text.trim() && !loading ? 1 : 0.5,
+                  marginTop: '16px',
+                }}
+              >
+                {loading ? 'Анализирую...' : 'Анализировать'}
+              </button>
             )}
           </>
         ) : (

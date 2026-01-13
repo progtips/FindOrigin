@@ -17,7 +17,12 @@ export default function RootLayout({
       <body style={{ margin: 0, padding: 0 }}>
         <Script
           src="https://telegram.org/js/telegram-web-app.js"
-          strategy="beforeInteractive"
+          strategy="afterInteractive"
+          onLoad={() => {
+            if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
+              console.log('Telegram Web App SDK загружен');
+            }
+          }}
         />
         {children}
       </body>
