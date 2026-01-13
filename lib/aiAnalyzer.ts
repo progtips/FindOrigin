@@ -1,8 +1,9 @@
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const AI_MODEL = 'google/gemma-3n-e2b-it';
+const AI_MODEL = 'openai/gpt-4o-mini';
 import { cache, createAnalysisCacheKey } from './cache';
 import { logger } from './logger';
+import { searchSources } from './searchEngine';
 
 interface SourceAnalysis {
   url: string;
@@ -19,28 +20,31 @@ interface AnalysisResult {
   summary: string;
 }
 
+type ToolCall = {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
+
 /**
- * Анализирует источники с помощью AI для определения релевантности
+ * Анализирует источники с помощью AI для определения релевантности.
+ * Теперь именно AI-модель сама выполняет поиск (через Tool Calling),
+ * а не получает заранее подобранный список ссылок.
  */
 export async function analyzeSourcesWithAI(
   originalText: string,
-  sources: Array<{ title: string; url: string; snippet: string; sourceType?: string }>
 ): Promise<AnalysisResult> {
+  // Если ключ не задан — не подменяем анализ псевдо-AI, просто сообщаем, что AI недоступен
   if (!OPENROUTER_API_KEY) {
-    logger.warn('OPENROUTER_API_KEY не установлен, возвращаю результаты без AI-анализа');
-    return createFallbackAnalysis(sources);
+    logger.warn('OPENROUTER_API_KEY не установлен, AI-анализ будет пропущен');
+    return createEmptyAnalysis();
   }
 
-  if (sources.length === 0) {
-    return {
-      sources: [],
-      summary: 'Источники не найдены для анализа.',
-    };
-  }
-
-  // Проверяем кэш
-  const sourceUrls = sources.map(s => s.url);
-  const cacheKey = createAnalysisCacheKey(originalText, sourceUrls);
+  // Кэшируем только по тексту запроса — сами источники теперь определяет AI
+  const cacheKey = createAnalysisCacheKey(originalText, []);
   const cached = cache.get<AnalysisResult>(cacheKey);
   
   if (cached) {
@@ -49,12 +53,26 @@ export async function analyzeSourcesWithAI(
   }
 
   try {
-    logger.info('Starting AI analysis', { sourcesCount: sources.length });
+    logger.info('Starting AI analysis', { textLength: originalText.length });
     // Формируем промпт для анализа
-    const prompt = createAnalysisPrompt(originalText, sources);
+    const prompt = createAnalysisPrompt(originalText);
 
-    // Вызываем OpenRouter API
-    const response = await fetch(OPENROUTER_API_URL, {
+    const systemMessage = {
+      role: 'system' as const,
+      content:
+        'Ты помощник для анализа релевантности источников информации. ' +
+        'У тебя есть инструмент google_search, который делает запрос в Google Search API и возвращает топ-результаты. ' +
+        'Используй его только тогда, когда это действительно улучшит анализ. ' +
+        'В конце верни только JSON, без каких-либо пояснений.',
+    };
+
+    const userMessage = {
+      role: 'user' as const,
+      content: prompt,
+    };
+
+    // Первичный запрос с включённым Tool Calling
+    const firstResponse = await fetch(OPENROUTER_API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -64,100 +82,194 @@ export async function analyzeSourcesWithAI(
       },
       body: JSON.stringify({
         model: AI_MODEL,
-        messages: [
+        messages: [systemMessage, userMessage],
+        tools: [
           {
-            role: 'system',
-            content: 'Ты помощник для анализа релевантности источников информации. Отвечай только в формате JSON без дополнительных комментариев.',
-          },
-          {
-            role: 'user',
-            content: prompt,
+            type: 'function',
+            function: {
+              name: 'google_search',
+              description:
+                'Выполнить веб-поиск релевантных источников через Google Custom Search API и вернуть краткий список результатов.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  query: {
+                    type: 'string',
+                    description: 'Поисковый запрос для Google Search.',
+                  },
+                  maxResults: {
+                    type: 'number',
+                    description: 'Максимальное количество результатов (по умолчанию 3).',
+                  },
+                },
+                required: ['query'],
+              },
+            },
           },
         ],
+        tool_choice: 'auto',
         temperature: 0.3,
         max_tokens: 2000,
       }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error('OpenRouter API error', { status: response.status, error: errorText });
-      return createFallbackAnalysis(sources);
+    if (!firstResponse.ok) {
+      const errorText = await firstResponse.text();
+      logger.error('OpenRouter API error (first call)', {
+        status: firstResponse.status,
+        error: errorText,
+      });
+      return createEmptyAnalysis();
     }
 
-    const data = await response.json();
-    const aiResponse = data.choices?.[0]?.message?.content;
+    const firstData: any = await firstResponse.json();
+    const firstMessage = firstData.choices?.[0]?.message;
+    const toolCalls: ToolCall[] | undefined = firstMessage?.tool_calls;
+
+    // Если модель запросила инструменты — выполняем их и делаем второй вызов
+    if (toolCalls && toolCalls.length > 0) {
+      logger.info('AI requested tool calls', {
+        tools: toolCalls.map(tc => tc.function.name),
+      });
+
+      const toolMessages: any[] = [];
+
+      for (const call of toolCalls) {
+        if (call.function.name === 'google_search') {
+          try {
+            const args = JSON.parse(call.function.arguments || '{}') as {
+              query?: string;
+              maxResults?: number;
+            };
+
+            const query = args.query || originalText;
+            const maxResults = args.maxResults && args.maxResults > 0 ? args.maxResults : 3;
+
+            // Выполняем реальный поиск через Google Search API
+            const searchResults = await searchSources([query]);
+            const limitedResults = searchResults.slice(0, maxResults);
+
+            toolMessages.push({
+              role: 'tool',
+              tool_call_id: call.id,
+              name: call.function.name,
+              content: JSON.stringify({
+                query,
+                results: limitedResults,
+              }),
+            });
+          } catch (toolError) {
+            logger.error('Error executing google_search tool', toolError);
+          }
+        }
+      }
+
+      const secondResponse = await fetch(OPENROUTER_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'HTTP-Referer': process.env.NEXT_PUBLIC_APP_URL || 'https://findorigin.vercel.app',
+          'X-Title': 'FindOrigin Bot',
+        },
+        body: JSON.stringify({
+          model: AI_MODEL,
+          messages: [systemMessage, userMessage, firstMessage, ...toolMessages],
+          temperature: 0.3,
+          max_tokens: 2000,
+        }),
+      });
+
+      if (!secondResponse.ok) {
+        const errorText = await secondResponse.text();
+        logger.error('OpenRouter API error (second call)', {
+          status: secondResponse.status,
+          error: errorText,
+        });
+        return createEmptyAnalysis();
+      }
+
+      const secondData: any = await secondResponse.json();
+      const aiResponse = secondData.choices?.[0]?.message?.content;
+
+      if (!aiResponse) {
+        logger.error('Пустой ответ от AI (после Tool Calling)');
+        return createEmptyAnalysis();
+      }
+
+      const analysis = parseAIResponse(aiResponse);
+      cache.set(cacheKey, analysis, 30 * 60 * 1000);
+      logger.info('AI analysis completed (with tools)', {
+        sourcesAnalyzed: analysis.sources.length,
+      });
+      return analysis;
+    }
+
+    // Если инструменты не вызывались — работаем как раньше
+    const aiResponse = firstData.choices?.[0]?.message?.content;
 
     if (!aiResponse) {
-      logger.error('Пустой ответ от AI');
-      return createFallbackAnalysis(sources);
+      logger.error('Пустой ответ от AI (без Tool Calling)');
+      return createEmptyAnalysis();
     }
 
-    // Парсим JSON ответ от AI
-    const analysis = parseAIResponse(aiResponse, sources);
-    
-    // Сохраняем в кэш
-    cache.set(cacheKey, analysis, 30 * 60 * 1000); // 30 минут
-    
-    logger.info('AI analysis completed', { sourcesAnalyzed: analysis.sources.length });
+    const analysis = parseAIResponse(aiResponse);
+    cache.set(cacheKey, analysis, 30 * 60 * 1000);
+    logger.info('AI analysis completed (no tools)', {
+      sourcesAnalyzed: analysis.sources.length,
+    });
     return analysis;
   } catch (error) {
     logger.error('Error analyzing sources with AI', error);
-    return createFallbackAnalysis(sources);
+    // Любая ошибка на стороне AI = отсутствие AI-анализа
+    return createEmptyAnalysis();
   }
 }
 
 /**
- * Создает промпт для анализа источников
+ * Создает промпт для анализа источников.
+ * Источники модель находит сама с помощью инструмента google_search.
  */
 function createAnalysisPrompt(
   originalText: string,
-  sources: Array<{ title: string; url: string; snippet: string }>
 ): string {
-  const sourcesText = sources
-    .map((source, index) => {
-      return `Источник ${index + 1}:
-Заголовок: ${source.title}
-URL: ${source.url}
-Описание: ${source.snippet || 'Нет описания'}`;
-    })
-    .join('\n\n');
-
-  return `Проанализируй следующие источники на предмет их релевантности к исходному тексту.
+  return `Проанализируй, какие источники подтверждают или опровергают следующий текст.
 
 Исходный текст:
 "${originalText}"
-
-Найденные источники:
-${sourcesText}
 
 Верни ответ в формате JSON:
 {
   "sources": [
     {
-      "index": 0,
+      "title": "Заголовок источника",
+      "url": "https://example.com/article",
+      "snippet": "Краткое описание содержания источника.",
       "relevanceScore": 85,
       "confidence": 80,
-      "matchDescription": "Краткое описание соответствия (2-3 предложения)"
+      "matchDescription": "Краткое описание соответствия (2-3 предложения)",
+      "sourceType": "news"
     }
   ],
   "summary": "Общее резюме анализа (1-2 предложения)"
 }
 
 Где:
+– сначала при необходимости используй инструмент google_search, чтобы найти кандидатов-источников;
 - relevanceScore: оценка релевантности от 0 до 100 (0 - не релевантно, 100 - полностью релевантно)
 - confidence: уверенность в оценке от 0 до 100
 - matchDescription: краткое описание того, как источник соответствует исходному тексту
 
-Важно: верни только валидный JSON, без markdown форматирования и дополнительных комментариев.`;
+Важно: в массиве "sources" верни только те источники, которые ты считаешь действительно релевантными исходному тексту,
+и верни только валидный JSON, без markdown форматирования и дополнительных комментариев.`;
 }
 
 /**
- * Парсит ответ от AI и создает структурированный результат
+ * Парсит ответ от AI и создает структурированный результат.
+ * Ожидаем, что AI уже вернул полный список источников в JSON.
  */
 function parseAIResponse(
   aiResponse: string,
-  sources: Array<{ title: string; url: string; snippet: string; sourceType?: string }>
 ): AnalysisResult {
   try {
     // Пытаемся извлечь JSON из ответа (может быть обернут в markdown)
@@ -182,19 +294,15 @@ function parseAIResponse(
 
     const parsed = JSON.parse(jsonText);
 
-    const analyzedSources: SourceAnalysis[] = sources.map((source, index) => {
-      const analysis = parsed.sources?.find((s: any) => s.index === index);
-      
-      return {
-        url: source.url,
-        title: source.title,
-        snippet: source.snippet || '',
-        relevanceScore: analysis?.relevanceScore ?? 50,
-        confidence: analysis?.confidence ?? 50,
-        matchDescription: analysis?.matchDescription || 'Анализ недоступен',
-        sourceType: source.sourceType,
-      };
-    });
+    const analyzedSources: SourceAnalysis[] = (parsed.sources || []).map((s: any) => ({
+      url: s.url || '',
+      title: s.title || 'Без заголовка',
+      snippet: s.snippet || '',
+      relevanceScore: typeof s.relevanceScore === 'number' ? s.relevanceScore : 50,
+      confidence: typeof s.confidence === 'number' ? s.confidence : 50,
+      matchDescription: s.matchDescription || 'Анализ недоступен',
+      sourceType: s.sourceType,
+    }));
 
     // Сортируем по релевантности
     analyzedSources.sort((a, b) => b.relevanceScore - a.relevanceScore);
@@ -205,28 +313,18 @@ function parseAIResponse(
     };
   } catch (error) {
     logger.error('Error parsing AI response', { error, aiResponse });
-    return createFallbackAnalysis(sources);
+    // Если не смогли распарсить ответ, считаем, что AI-анализа нет
+    return createEmptyAnalysis();
   }
 }
 
 /**
- * Создает fallback анализ без AI (используется при ошибках)
+ * Создает «пустой» анализ, сигнализирующий, что AI не сработал.
+ * Источники при этом остаются только в разделе results, а не в analysis.
  */
-function createFallbackAnalysis(
-  sources: Array<{ title: string; url: string; snippet: string; sourceType?: string }>
-): AnalysisResult {
-  const analyzedSources: SourceAnalysis[] = sources.map((source) => ({
-    url: source.url,
-    title: source.title,
-    snippet: source.snippet || '',
-    relevanceScore: 70, // Средняя оценка по умолчанию
-    confidence: 50, // Низкая уверенность без AI
-    matchDescription: 'AI-анализ недоступен. Источник найден по поисковому запросу.',
-    sourceType: source.sourceType,
-  }));
-
+function createEmptyAnalysis(): AnalysisResult {
   return {
-    sources: analyzedSources,
-    summary: 'Анализ выполнен без AI (AI-сервис недоступен).',
+    sources: [],
+    summary: 'AI-анализ недоступен (ошибка или отсутствует ключ).',
   };
 }

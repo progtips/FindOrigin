@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { extractKeyElements } from '@/lib/textProcessor';
-import { searchSources } from '@/lib/searchEngine';
 import { analyzeSourcesWithAI } from '@/lib/aiAnalyzer';
 import { formatFinalMessage } from '@/lib/messageFormatter';
 
@@ -18,14 +17,11 @@ export async function GET(request: NextRequest) {
     // Извлекаем ключевые элементы
     const keyElements = extractKeyElements(text);
 
-    // Формируем поисковые запросы
+    // Формируем поисковые запросы (для отображения и дебага, поиск теперь делает сама AI-модель)
     const searchQueries = generateSearchQueries(keyElements, text);
 
-    // Ищем источники
-    const searchResults = await searchSources(searchQueries);
-
-    // Выполняем AI-анализ
-    const analysis = await analyzeSourcesWithAI(text, searchResults);
+    // Выполняем AI-анализ (AI сама запрашивает поиск через Tool Calling)
+    const analysis = await analyzeSourcesWithAI(text);
 
     // Формируем финальное сообщение
     const finalMessage = formatFinalMessage(text, analysis);
@@ -38,8 +34,9 @@ export async function GET(request: NextRequest) {
         searchQueries,
       },
       results: {
-        count: searchResults.length,
-        sources: searchResults,
+        // Используем источники, которые вернула именно AI-модель
+        count: analysis.sources.length,
+        sources: analysis.sources,
       },
       analysis: {
         sources: analysis.sources,
